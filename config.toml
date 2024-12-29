@@ -1,0 +1,11 @@
+[package]
+name = "Blog"
+version = "0.0.1"
+# description, icon, etc..
+
+[dashboard]
+path = "./dashboard"
+
+# TODO: Add Name, Permissions, etc..
+[dashboard.routes.home]
+route = "/"

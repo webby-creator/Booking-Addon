@@ -1,0 +1,56 @@
+[package]
+name = "blog-booking"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+addon-common = { path = "../../addon-common", features = ["sqlx"] }
+global-common = { path = "../../global-common" }
+
+hyper = "1.5"
+axum = { version = "0.7", features = ["multipart"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = [
+    "fs",
+    "trace",
+    "cors",
+    "validate-request",
+] }
+
+tokio = { workspace = true, features = ["full"] }
+# futures = "0.3"
+# mime_guess = "2.0"
+# image = { version = "0.25", features = ["webp"] }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+eyre = { workspace = true }
+thiserror = { workspace = true }
+
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tracing = { workspace = true }
+
+# sha2 = "0.10"
+uuid = { workspace = true, features = ["serde", "v7"] }
+# num_enum = { workspace = true }
+time = { workspace = true }
+
+# sqlx = { workspace = true, features = [
+#     "runtime-tokio",
+#     "sqlite",
+#     "uuid",
+#     "time",
+# ] }
+
+# # Upload Common
+# btwo = { path = "P:/Coding/Rust/2023/btwo-backblaze" }
+
+# async-trait = "0.1"
+# bytes = "1.6"
+# concread = "0.5"
+# lazy_static = "1.5"
+# mime = "0.3"
+# reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+# sha1 = "0.10"
+# regex = "1.10"
