@@ -14,14 +14,16 @@ use axum::{
 };
 use eyre::ContextCompat;
 use global_common::{
+    filter::{Filter, FilterConditionType, FilterValue},
     request::CmsQuery,
     response::CmsRowResponse,
     schema::SchematicFieldKey,
+    tz::find_offset_by_id,
     uuid::{CollectionName, UuidType},
 };
 use time::{
-    macros::{format_description, offset},
-    Duration, PrimitiveDateTime, UtcOffset,
+    format_description::well_known::Iso8601, macros::format_description, Duration,
+    PrimitiveDateTime, UtcOffset,
 };
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
@@ -109,7 +111,6 @@ async fn get_available_days(
 
     // TODO: Simplify
     Ok(Json(WrappingResponse::okay(serde_json::json!({
-        "timeZone": "America/Los_Angeles",
         "available": available_days,
     }))))
 }
@@ -176,6 +177,73 @@ async fn get_available_hours(
     )
     .await?;
 
+    let bookings = query_cms_rows(
+        uuid,
+        CollectionName {
+            id: String::from("bookings"),
+            ns: Some(String::from("@booking")),
+        },
+        CmsQuery {
+            filters: Some(vec![
+                Filter {
+                    name: String::from("bookDate"),
+                    cond: FilterConditionType::Gte,
+                    value: FilterValue::Text(format!(
+                        "{year}-{month:02}-{day:02} 00:00:00.0 +00:00:00"
+                    )),
+                },
+                Filter {
+                    name: String::from("bookDate"),
+                    cond: FilterConditionType::Lte,
+                    value: FilterValue::Text(format!(
+                        "{year}-{month:02}-{day:02} 23:59:59.0 +00:00:00"
+                    )),
+                },
+            ]),
+            // sort: None,
+            // columns: None,
+            // limit: None,
+            // offset: None,
+            // include_files: false,
+            ..CmsQuery::default()
+        },
+    )
+    .await?;
+
+    let time_zone_str = staff_schedule
+        .fields
+        .get(&SchematicFieldKey::Other(String::from("timeZone")))
+        .cloned()
+        .context("Missing TimeZone")?
+        .try_as_text()?;
+    let local_offset = find_offset_by_id(&time_zone_str).context("Invalid TimeZone")?;
+
+    let booked_times = bookings
+        .items
+        .iter()
+        .map(|item| {
+            let start_time = item
+                .fields
+                .get(&SchematicFieldKey::Other(String::from("bookDate"))).unwrap()
+                .any_as_text().unwrap();
+
+            // Parse start_time value of 2025-01-02 12:00:00.0 +00:00:00
+            let start_time = time::OffsetDateTime::parse(
+                &start_time,
+                &format_description!(
+                    "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond] [offset_hour sign:mandatory]:[offset_minute]:[offset_second]"
+                ),
+            )
+            .unwrap()
+            .replace_offset(local_offset);
+
+            start_time
+        })
+        .collect::<Vec<_>>();
+
+    // println!("{bookings:#?}");
+    // println!("{booked_times:?}");
+
     // TODO: Get bookings for the start-end time for the staff schedule(s)
 
     let duration = Duration::minutes(
@@ -187,7 +255,7 @@ async fn get_available_hours(
             .convert_f64() as i64,
     );
 
-    let break_ = Duration::minutes(
+    let break_duration = Duration::minutes(
         schedule
             .fields
             .get(&SchematicFieldKey::Other(String::from("break")))
@@ -238,31 +306,30 @@ async fn get_available_hours(
         let start_time = time::Time::parse(&start_time, &time_format).unwrap();
         let end_time = time::Time::parse(&end_time, &time_format).unwrap();
 
-        // TODO: Add "break" field eg. 45 min duration, 15 min break = 60 minutes total for one staff service.
-
-        let local_offset = offset!(-7);
-
         // We don't convert to UTC since start_time & end_time is in local offset time.
-        // TODO: Remove UTC offset, for some reason JavaScript Date is applying the PST offset to the formatted string - need to fix the backend
         let mut current_time_pos = list_date
             .replace_time(start_time)
-            .assume_offset(UtcOffset::UTC);
+            .assume_offset(local_offset);
 
         // Loop until we hit the end of time
-        while current_time_pos.time() + duration + break_ <= end_time {
+        while current_time_pos.time() + duration + break_duration <= end_time {
+            // TODO: Replace w/ UTC offset temporarily to fix JavaScript Date
+            let utc_time_pos = current_time_pos.replace_offset(UtcOffset::UTC);
+
             available_hours.push(serde_json::json!({
-                "start": current_time_pos.format(&time::format_description::well_known::Iso8601::DEFAULT).unwrap(),
-                "end": (current_time_pos + duration).format(&time::format_description::well_known::Iso8601::DEFAULT).unwrap(),
+                "start": utc_time_pos.format(&Iso8601::DEFAULT).unwrap(),
+                "end": (utc_time_pos + duration).format(&Iso8601::DEFAULT).unwrap(),
+                "isBooked": booked_times.iter().any(|booked_time| {
+                    *booked_time >= current_time_pos && *booked_time <= current_time_pos + duration
+                }),
             }));
 
-            current_time_pos += duration + break_;
+            current_time_pos += duration + break_duration;
         }
     }
 
-    // let available_hours = gather_available_hours(list_date, staff_schedule)?;
-
     Ok(Json(WrappingResponse::okay(serde_json::json!({
-        "timeZone": "America/Los_Angeles",
+        "timeZone": time_zone_str,
         "available": available_hours,
     }))))
 }
@@ -310,7 +377,13 @@ fn gather_available_days(
         let time_distance = end_time - start_time;
 
         // TODO: Remove Hardcoding
-        let local_offset = offset!(-7);
+        let time_zone_str = item
+            .fields
+            .get(&SchematicFieldKey::Other(String::from("timeZone")))
+            .cloned()
+            .context("Missing TimeZone")?
+            .try_as_text()?;
+        let local_offset = find_offset_by_id(&time_zone_str).context("Invalid TimeZone")?;
 
         let curr_dt = start_date
             .with_time(start_time)
@@ -318,77 +391,76 @@ fn gather_available_days(
             .assume_offset(local_offset)
             .to_offset(UtcOffset::UTC);
 
-        {
-            // TODO: Interval
-            let freq = frequency_str_to_duration(&rec_rule.frequency)?;
+        // TODO: Interval
+        let freq = frequency_str_to_duration(&rec_rule.frequency)?;
 
-            let mut found = Vec::new();
+        let mut found = Vec::new();
 
-            let mut pos = curr_dt.clone();
+        let mut pos = curr_dt.clone();
 
-            // TODO: Can be improved. This is a brute force method.
-            loop {
-                pos = pos.saturating_add(freq);
+        // TODO: Can be improved. This is a brute force method.
+        loop {
+            pos = pos.saturating_add(freq);
 
-                // If we're in the current month, we can add it to the list.
-                if lookup_time.month() == pos.month() {
-                    found.push(pos);
+            // If we're in the current month, we can add it to the list.
+            if lookup_time.month() == pos.month() {
+                found.push(pos);
 
-                    // There should only ever be a MAX of 5 weeks in a month.
-                    // If we reach 5, we can stop to prevent another loop.
-                    if found.len() == 5 {
-                        break;
-                    }
-                }
-                // If we passed the current month, we can stop.
-                else if pos.month() as u8 > lookup_time.month() as u8 {
-                    break;
-                }
-                // If we're still in the past, we can skip.
-                else if found.is_empty() {
-                    continue;
-                } else {
+                // There should only ever be a MAX of 5 weeks in a month.
+                // If we reach 5, we can stop to prevent another loop.
+                if found.len() == 5 {
                     break;
                 }
             }
-
-            for utc in found {
-                let local = utc.to_offset(local_offset);
-
-                // Start DateTime ID
-                // TODO: Chars [32 start time][1 version][3 duration][1 recurrence][3 original utc offset]
-                let start_id = Uuid::new_v7(uuid::Timestamp::from_unix(
-                    uuid::NoContext,
-                    utc.unix_timestamp() as u64,
-                    0,
-                ));
-
-                available_days.push(serde_json::json!({
-                    // TODO: Add Duration, Recurrence, Week Day, etc.. to it.
-                    "id": start_id.as_simple(),
-                    "staffScheduleId": item.fields.get(&SchematicFieldKey::Id).unwrap(),
-
-                    "start": {
-                        "dateUtc": utc.date(),
-                        "timeUtc": utc.time().format(&time_format).unwrap(),
-                        "dateLocal": local.date(),
-                        "timeLocal": start_time.format(&time_format).unwrap(),
-                    },
-
-                    "end": {
-                        "dateUtc": (utc + time_distance).date(),
-                        "timeUtc": (utc.time() + time_distance).format(&time_format).unwrap(),
-                        "dateLocal": (local + time_distance).date(),
-                        "timeLocal": end_time.format(&time_format).unwrap(),
-                    },
-
-                    "monthUtc": utc.month() as u8,
-                    "dayUtc": utc.day() as u8,
-
-                    "monthLocal": local.month() as u8,
-                    "dayLocal": local.day() as u8,
-                }));
+            // If we passed the current month, we can stop.
+            else if pos.month() as u8 > lookup_time.month() as u8 {
+                break;
             }
+            // If we're still in the past, we can skip.
+            else if found.is_empty() {
+                continue;
+            } else {
+                break;
+            }
+        }
+
+        for utc in found {
+            let local = utc.to_offset(local_offset);
+
+            // Start DateTime ID
+            // TODO: Chars [32 start time][1 version][3 duration][1 recurrence][3 original utc offset]
+            let start_id = Uuid::new_v7(uuid::Timestamp::from_unix(
+                uuid::NoContext,
+                utc.unix_timestamp() as u64,
+                0,
+            ));
+
+            available_days.push(serde_json::json!({
+                // TODO: Add Duration, Recurrence, Week Day, etc.. to it.
+                "id": start_id.as_simple(),
+                "staffScheduleId": item.fields.get(&SchematicFieldKey::Id).unwrap(),
+                "timeZone": time_zone_str,
+
+                "start": {
+                    "dateUtc": utc.date(),
+                    "timeUtc": utc.time().format(&time_format).unwrap(),
+                    "dateLocal": local.date(),
+                    "timeLocal": start_time.format(&time_format).unwrap(),
+                },
+
+                "end": {
+                    "dateUtc": (utc + time_distance).date(),
+                    "timeUtc": (utc.time() + time_distance).format(&time_format).unwrap(),
+                    "dateLocal": (local + time_distance).date(),
+                    "timeLocal": end_time.format(&time_format).unwrap(),
+                },
+
+                "monthUtc": utc.month() as u8,
+                "dayUtc": utc.day() as u8,
+
+                "monthLocal": local.month() as u8,
+                "dayLocal": local.day() as u8,
+            }));
         }
     }
 
