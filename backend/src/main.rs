@@ -1,15 +1,15 @@
 #[macro_use]
 extern crate tracing;
 
-use std::net::SocketAddr;
+use std::{collections::HashMap, net::SocketAddr, sync::LazyLock};
 
 use addon_common::{
-    request::{get_cms_row_by_id, query_cms_rows},
-    JsonResponse, WrappingResponse,
+    request::{get_cms_row_by_id, import_data_row, query_cms_rows},
+    JsonResponse, ListResponse, WrappingResponse,
 };
 use axum::{
     extract::{Path, Query},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use eyre::ContextCompat;
@@ -22,10 +22,10 @@ use global_common::{
     uuid::{CollectionName, UuidType},
 };
 use time::{
-    format_description::well_known::Iso8601, macros::format_description, Duration,
-    PrimitiveDateTime, UtcOffset,
+    format_description::well_known::Iso8601, macros::format_description, Date, Duration, Month,
+    OffsetDateTime, PrimitiveDateTime, Time, UtcOffset,
 };
-use tokio::net::TcpListener;
+use tokio::{net::TcpListener, sync::Mutex};
 use tower_http::trace::TraceLayer;
 
 mod error;
@@ -48,6 +48,10 @@ async fn main() -> Result<()> {
             .route("/:uuid/availableDays", get(get_available_days))
             .route("/:uuid/availableHours", get(get_available_hours))
             // .route("/:uuid/book", post(post_booking))
+            .route("/form-process/before", get(post_form_process_before))
+            .route("/form-process/error", post(post_form_process_error))
+            .route("/form-process/after", post(post_form_process_after))
+            .route("/form-render", get(get_form_render))
             .layer(TraceLayer::new_for_http()),
     )
     .await?;
@@ -78,8 +82,7 @@ async fn get_available_days(
     // TODO: Remember Daylight Savings Time
 
     let now =
-        time::Date::from_calendar_date(query.year as i32, time::Month::try_from(query.month)?, 1)?
-            .midnight();
+        Date::from_calendar_date(query.year as i32, Month::try_from(query.month)?, 1)?.midnight();
 
     let staff_schedule_resp = query_cms_rows(
         uuid,
@@ -135,10 +138,9 @@ async fn get_available_hours(
 ) -> Result<JsonResponse<serde_json::Value>> {
     // TODO: Remember Daylight Savings Time
 
-    let list_date =
-        time::Date::from_calendar_date(year as i32, time::Month::try_from(month)?, day)?.midnight();
+    let list_date = Date::from_calendar_date(year as i32, Month::try_from(month)?, day)?.midnight();
 
-    let mut staff_schedule = get_cms_row_by_id(
+    let staff_schedule = get_cms_row_by_id(
         uuid,
         CollectionName {
             id: String::from("staffSchedule"),
@@ -216,6 +218,493 @@ async fn get_available_hours(
         .cloned()
         .context("Missing TimeZone")?
         .try_as_text()?;
+
+    let available_hours = gather_available_hours(
+        list_date,
+        service
+            .fields
+            .get(&SchematicFieldKey::Id)
+            .unwrap()
+            .any_as_text()?,
+        &schedule,
+        staff_schedule,
+        bookings,
+    )?
+    .into_iter()
+    .map(|v| {
+        serde_json::json!({
+            "start": v.start.format(&Iso8601::DEFAULT).unwrap(),
+            "end": v.end.format(&Iso8601::DEFAULT).unwrap(),
+            "isBooked": v.is_booked,
+            "serviceId": v.service_id,
+            "scheduleId": v.schedule_id,
+            "staffId": v.staff_id,
+            "staffScheduleId": v.staff_schedule_id,
+        })
+    })
+    .collect::<Vec<_>>();
+
+    Ok(Json(WrappingResponse::okay(serde_json::json!({
+        "timeZone": time_zone_str,
+        "available": available_hours,
+    }))))
+}
+
+//
+
+static PROCESSING_FORMS: LazyLock<Mutex<HashMap<(String, u8, u8, usize), String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FormProcessQuery {
+    client_key: String,
+    uuid: UuidType,
+
+    // TODO: Replace w/ BookingId
+    staff_schedule_id: String,
+    schedule_id: String,
+    service_id: String,
+    staff_id: String,
+
+    day: u8,
+    month: u8,
+    year: usize,
+    time: String,
+}
+
+async fn post_form_process_before(
+    Query(FormProcessQuery {
+        client_key,
+        uuid,
+        staff_schedule_id,
+        schedule_id,
+        service_id,
+        staff_id,
+        day,
+        month,
+        year,
+        time,
+    }): Query<FormProcessQuery>,
+) -> Result<()> {
+    // Check if the form is already being processed.
+
+    let schedule = get_cms_row_by_id(
+        uuid,
+        CollectionName {
+            id: String::from("schedule"),
+            ns: Some(String::from("@booking")),
+        },
+        &schedule_id,
+    )
+    .await?;
+
+    let staff_schedule = get_cms_row_by_id(
+        uuid,
+        CollectionName {
+            id: String::from("staffSchedule"),
+            ns: Some(String::from("@booking")),
+        },
+        // TODO: Multiple ids can be in here.
+        &staff_schedule_id,
+    )
+    .await?;
+
+    // Some validations
+
+    // TODO: Replace any_as_text() -> try_as_text()
+    if schedule
+        .fields
+        .get(&SchematicFieldKey::Other(String::from("service")))
+        .map(|v| v.any_as_text())
+        .transpose()?
+        .as_deref()
+        != Some(service_id.as_str())
+    {
+        return Err(eyre::eyre!("Service ID does not match schedule"))?;
+    }
+
+    if staff_schedule
+        .fields
+        .get(&SchematicFieldKey::Other(String::from("schedule")))
+        .map(|v| v.any_as_text())
+        .transpose()?
+        .as_deref()
+        != Some(schedule_id.as_str())
+    {
+        return Err(eyre::eyre!("Schedule ID does not match staff schedule"))?;
+    }
+
+    if staff_schedule
+        .fields
+        .get(&SchematicFieldKey::Other(String::from("staff")))
+        .map(|v| v.any_as_text())
+        .transpose()?
+        .as_deref()
+        != Some(staff_id.as_str())
+    {
+        return Err(eyre::eyre!("Staff ID does not match staff schedule"))?;
+    }
+
+    // We lock here to ensure we don't have multiple of the same time form being processed at the same time.
+    let mut proc = PROCESSING_FORMS.lock().await;
+
+    let key = (schedule_id, day, month, year);
+
+    if proc.contains_key(&key) {
+        return Err(eyre::eyre!("Form already being processed"))?;
+    }
+
+    let bookings = query_cms_rows(
+        uuid,
+        CollectionName {
+            id: String::from("bookings"),
+            ns: Some(String::from("@booking")),
+        },
+        CmsQuery {
+            filters: Some(vec![
+                Filter {
+                    name: String::from("bookDate"),
+                    cond: FilterConditionType::Gte,
+                    value: FilterValue::Text(format!(
+                        "{year}-{month:02}-{day:02} 00:00:00.0 +00:00:00"
+                    )),
+                },
+                Filter {
+                    name: String::from("bookDate"),
+                    cond: FilterConditionType::Lte,
+                    value: FilterValue::Text(format!(
+                        "{year}-{month:02}-{day:02} 23:59:59.0 +00:00:00"
+                    )),
+                },
+            ]),
+            // sort: None,
+            // columns: None,
+            // limit: None,
+            // offset: None,
+            // include_files: false,
+            ..CmsQuery::default()
+        },
+    )
+    .await?;
+
+    let found_hours = gather_available_hours(
+        Date::from_calendar_date(year as i32, Month::try_from(month)?, day)?.midnight(),
+        schedule
+            .fields
+            .get(&SchematicFieldKey::Other(String::from("service")))
+            .context("Service ID")?
+            .any_as_text()?,
+        &schedule,
+        staff_schedule,
+        bookings,
+    )?;
+
+    // Find the hour and check to see if it's booked.
+
+    let time_format = format_description!("[hour]:[minute]:[second]");
+
+    let time = Time::parse(&time, &time_format)?;
+
+    let found_hour = found_hours
+        .iter()
+        .find(|v| v.start.time() == time)
+        .ok_or_else(|| eyre::eyre!("Time not found"))?;
+
+    if found_hour.is_booked {
+        return Err(eyre::eyre!("Time is already booked"))?;
+    }
+
+    proc.insert(key, client_key);
+
+    Ok(())
+}
+
+async fn post_form_process_error(Query(query): Query<FormProcessQuery>) -> Result<()> {
+    // Remove the form from the processing list.
+
+    let key = (query.schedule_id, query.day, query.month, query.year);
+
+    PROCESSING_FORMS.lock().await.remove(&key);
+
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FormProcessJson {
+    contact_uuid: Uuid,
+    schema_data_uuid: Uuid,
+}
+
+async fn post_form_process_after(
+    Query(FormProcessQuery {
+        client_key,
+        uuid,
+        staff_schedule_id,
+        schedule_id,
+        service_id,
+        staff_id,
+        day,
+        month,
+        year,
+        time,
+    }): Query<FormProcessQuery>,
+    Json(FormProcessJson {
+        contact_uuid,
+        schema_data_uuid,
+    }): Json<FormProcessJson>,
+) -> Result<()> {
+    // Remove the form from the processing list.
+
+    let key = (schedule_id, day, month, year);
+
+    let mut processing = PROCESSING_FORMS.lock().await;
+
+    let schedule = get_cms_row_by_id(
+        uuid,
+        CollectionName {
+            id: String::from("schedule"),
+            ns: Some(String::from("@booking")),
+        },
+        &key.0,
+    )
+    .await?;
+
+    let duration = schedule
+        .fields
+        .get(&SchematicFieldKey::Other(String::from("duration")))
+        .context("Service Duration")?
+        .try_as_number()?;
+
+    let _client_key = processing.remove(&key).context("Process not found")?;
+
+    if _client_key != client_key {
+        return Err(eyre::eyre!("Client key does not match"))?;
+    }
+
+    let time_format = format_description!("[hour]:[minute]:[second]");
+
+    let time = Time::parse(&time, &time_format)?;
+
+    let book_time =
+        Date::from_calendar_date(year as i32, Month::try_from(month)?, day)?.with_time(time);
+
+    import_data_row(
+        uuid,
+        CollectionName {
+            id: String::from("bookings"),
+            ns: Some(String::from("@booking")),
+        },
+        HashMap::from([
+            (
+                String::from("bookDate"),
+                format!("{year}-{month:02}-{day:02} {time} +00:00:00").into(),
+            ),
+            (
+                String::from("bookID"),
+                (book_time.assume_utc() - time::OffsetDateTime::UNIX_EPOCH)
+                    .whole_seconds()
+                    .to_string()
+                    .into(),
+            ),
+            (String::from("duration"), duration.into()),
+            (String::from("service"), service_id.into()),
+            (String::from("staffMember"), staff_id.into()),
+            (String::from("contactUuid"), contact_uuid.to_string().into()),
+            (
+                String::from("schemaDataUuid"),
+                schema_data_uuid.to_string().into(),
+            ),
+        ]),
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn get_form_render(
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<JsonResponse<serde_json::Value>> {
+    Ok(Json(WrappingResponse::okay(serde_json::json!({
+        "data": {
+            "type": "contact",
+            "fields": [
+                {
+                    "contact_key": "firstName",
+                    "data": {
+                        "type": "input",
+                        "value": {
+                            "field_description": null,
+                            "field_title": null,
+                            "form_name": "firstName",
+                            "is_hidden": false,
+                            "is_read_only": false,
+                            "is_required": true,
+                            "placeholder": "First Name",
+                            "type_of": {
+                                "default": null,
+                                "long_text": false,
+                                "max": 30,
+                                "min": null,
+                                "personal_info": false,
+                                "type": "text",
+                                "validation": null
+                            }
+                        }
+                    },
+                    "guid": "019426bf-8acc-7636-8cad-e894caf12b6b",
+                    "id": "input1",
+                    "layer_index": 0,
+                    "offset": 0,
+                    "row_index": 0,
+                    "size": 8
+                },
+                {
+                    "contact_key": "lastName",
+                    "data": {
+                        "type": "input",
+                        "value": {
+                            "field_description": null,
+                            "field_title": null,
+                            "form_name": "lastName",
+                            "is_hidden": false,
+                            "is_read_only": false,
+                            "is_required": true,
+                            "placeholder": "Last Name",
+                            "type_of": {
+                                "default": null,
+                                "long_text": false,
+                                "max": 30,
+                                "min": null,
+                                "personal_info": false,
+                                "type": "text",
+                                "validation": null
+                            }
+                        }
+                    },
+                    "guid": "019426bf-8acc-7d7d-a789-9e82ec125a9c",
+                    "id": "input2",
+                    "layer_index": 0,
+                    "offset": 8,
+                    "row_index": 0,
+                    "size": 8
+                },
+                {
+                    "contact_key": "email",
+                    "data": {
+                        "type": "input",
+                        "value": {
+                            "field_description": null,
+                            "field_title": null,
+                            "form_name": "email",
+                            "is_hidden": false,
+                            "is_read_only": false,
+                            "is_required": true,
+                            "placeholder": "Email Address",
+                            "type_of": {
+                                "type": "email",
+                                "validation": null
+                            }
+                        }
+                    },
+                    "guid": "019426bf-8acc-712c-98fb-27e7d09e4109",
+                    "id": "input3",
+                    "layer_index": 0,
+                    "offset": 0,
+                    "row_index": 1,
+                    "size": 8
+                },
+                {
+                    "contact_key": "phone",
+                    "data": {
+                        "type": "input",
+                        "value": {
+                            "field_description": null,
+                            "field_title": null,
+                            "form_name": "phone",
+                            "is_hidden": false,
+                            "is_read_only": false,
+                            "is_required": false,
+                            "placeholder": "Phone Number",
+                            "type_of": {
+                                "format": {
+                                    "type": "default"
+                                },
+                                "type": "phone"
+                            }
+                        }
+                    },
+                    "guid": "019426bf-8acc-7338-96f9-e57e736a4131",
+                    "id": "input4",
+                    "layer_index": 0,
+                    "offset": 8,
+                    "row_index": 1,
+                    "size": 8
+                },
+                {
+                    "contact_key": null,
+                    "data": {
+                        "type": "input",
+                        "value": {
+                            "field_description": null,
+                            "field_title": null,
+                            "form_name": "message",
+                            "is_hidden": false,
+                            "is_read_only": false,
+                            "is_required": true,
+                            "placeholder": "Message",
+                            "type_of": {
+                                "default": null,
+                                "long_text": true,
+                                "max": 500,
+                                "min": null,
+                                "personal_info": false,
+                                "type": "text",
+                                "validation": null
+                            }
+                        }
+                    },
+                    "guid": "019426bf-8acc-79a7-9205-2e46b0143d3c",
+                    "id": "input5",
+                    "layer_index": 0,
+                    "offset": 0,
+                    "row_index": 2,
+                    "size": 16
+                }
+            ],
+            "store_in_submissions": false
+        },
+        "submitQuery": query
+    }))))
+}
+
+//
+
+#[derive(Debug)]
+struct FoundHour {
+    start: OffsetDateTime,
+    end: OffsetDateTime,
+    is_booked: bool,
+    service_id: String,
+    schedule_id: String,
+    staff_id: String,
+    staff_schedule_id: String,
+}
+
+fn gather_available_hours(
+    list_date: PrimitiveDateTime,
+    service_id: String,
+    schedule: &CmsRowResponse,
+    mut staff_schedule: CmsRowResponse,
+    bookings: ListResponse<CmsRowResponse>,
+) -> Result<Vec<FoundHour>> {
+    let time_zone_str = staff_schedule
+        .fields
+        .get(&SchematicFieldKey::Other(String::from("timeZone")))
+        .cloned()
+        .context("Missing TimeZone")?
+        .try_as_text()?;
     let local_offset = find_offset_by_id(&time_zone_str).context("Invalid TimeZone")?;
 
     let booked_times = bookings
@@ -252,7 +741,7 @@ async fn get_available_hours(
             .get(&SchematicFieldKey::Other(String::from("duration")))
             .context("Service Duration")?
             .try_as_number()?
-            .convert_f64() as i64,
+            .convert_i64(),
     );
 
     let break_duration = Duration::minutes(
@@ -303,8 +792,8 @@ async fn get_available_hours(
             .replace(".0", "");
 
         // let start_date = time::Date::parse(&start_date.try_as_text()?, &date_format).unwrap();
-        let start_time = time::Time::parse(&start_time, &time_format).unwrap();
-        let end_time = time::Time::parse(&end_time, &time_format).unwrap();
+        let start_time = Time::parse(&start_time, &time_format).unwrap();
+        let end_time = Time::parse(&end_time, &time_format).unwrap();
 
         // We don't convert to UTC since start_time & end_time is in local offset time.
         let mut current_time_pos = list_date
@@ -316,28 +805,43 @@ async fn get_available_hours(
             // TODO: Replace w/ UTC offset temporarily to fix JavaScript Date
             let utc_time_pos = current_time_pos.replace_offset(UtcOffset::UTC);
 
-            available_hours.push(serde_json::json!({
-                "start": utc_time_pos.format(&Iso8601::DEFAULT).unwrap(),
-                "end": (utc_time_pos + duration).format(&Iso8601::DEFAULT).unwrap(),
-                "isBooked": booked_times.iter().any(|booked_time| {
+            available_hours.push(FoundHour {
+                start: utc_time_pos,
+                end: (utc_time_pos + duration),
+                is_booked: booked_times.iter().any(|booked_time| {
                     *booked_time >= current_time_pos && *booked_time <= current_time_pos + duration
                 }),
-            }));
+                service_id: service_id.clone(),
+                schedule_id: schedule
+                    .fields
+                    .get(&SchematicFieldKey::Id)
+                    .unwrap()
+                    .any_as_text()?,
+                staff_id: staff_schedule
+                    .fields
+                    .get(&SchematicFieldKey::OtherStatic("staff"))
+                    .unwrap()
+                    .any_as_text()?,
+                staff_schedule_id: staff_schedule
+                    .fields
+                    .get(&SchematicFieldKey::Id)
+                    .unwrap()
+                    .any_as_text()?,
+            });
 
             current_time_pos += duration + break_duration;
         }
     }
 
-    Ok(Json(WrappingResponse::okay(serde_json::json!({
-        "timeZone": time_zone_str,
-        "available": available_hours,
-    }))))
+    Ok(available_hours)
 }
 
 fn gather_available_days(
     lookup_time: PrimitiveDateTime,
     staff_schedule_items: Vec<CmsRowResponse>,
 ) -> Result<Vec<serde_json::Value>> {
+    let lookup_time = lookup_time.assume_utc();
+
     let mut available_days = Vec::new();
 
     // 1st. Convert Date/Time to UTC
@@ -370,9 +874,9 @@ fn gather_available_days(
                 .context("Missing end field")?,
         )?)?;
 
-        let start_date = time::Date::parse(&start_date.try_as_text()?, &date_format).unwrap();
-        let start_time = time::Time::parse(&start_time, &time_format).unwrap();
-        let end_time = time::Time::parse(&end_time, &time_format).unwrap();
+        let start_date = Date::parse(&start_date.try_as_text()?, &date_format).unwrap();
+        let start_time = Time::parse(&start_time, &time_format).unwrap();
+        let end_time = Time::parse(&end_time, &time_format).unwrap();
 
         let time_distance = end_time - start_time;
 
@@ -413,7 +917,7 @@ fn gather_available_days(
                 }
             }
             // If we passed the current month, we can stop.
-            else if pos.month() as u8 > lookup_time.month() as u8 {
+            else if pos > lookup_time {
                 break;
             }
             // If we're still in the past, we can skip.

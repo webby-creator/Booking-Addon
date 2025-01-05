@@ -26,6 +26,8 @@ pub enum Error {
     Time(#[from] time::Error),
     #[error("Time Error: {0}")]
     TimeRange(#[from] time::error::ComponentRange),
+    #[error("Time Parse Error: {0}")]
+    TimeParse(#[from] time::error::Parse),
 
     #[error("Multipart Error: {0}")]
     Multipart(#[from] axum::extract::multipart::MultipartError),

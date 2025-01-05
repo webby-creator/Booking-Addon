@@ -1,6 +1,10 @@
 [workspace]
 members = ["./backend"]
 
+[profile.release]
+strip = true
+# Optimize for size.
+opt-level = "z"
 
 [workspace.dependencies]
 tokio = { version = "1.42" }
