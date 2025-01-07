@@ -4,6 +4,7 @@ extern crate tracing;
 use std::{collections::HashMap, net::SocketAddr, sync::LazyLock};
 
 use addon_common::{
+    register_call_token,
     request::{get_cms_row_by_id, import_data_row, query_cms_rows},
     JsonResponse, ListResponse, WrappingResponse,
 };
@@ -29,12 +30,16 @@ use tokio::{net::TcpListener, sync::Mutex};
 use tower_http::trace::TraceLayer;
 
 mod error;
+mod http;
 
 pub use error::{Error, Result};
 use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // TODO: Ultimately I'll need to decide if I want to send a unique token per-website or per-app
+    register_call_token(Uuid::from_u128(0x01938f4ff50c72039f89b367e9d49efbu128));
+
     let port = 5941;
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -45,6 +50,7 @@ async fn main() -> Result<()> {
     axum::serve(
         listener,
         Router::new()
+            .nest("/registration", http::routes())
             .route("/:uuid/availableDays", get(get_available_days))
             .route("/:uuid/availableHours", get(get_available_hours))
             // .route("/:uuid/book", post(post_booking))
