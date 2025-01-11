@@ -28,6 +28,7 @@ use time::{
 };
 use tokio::{net::TcpListener, sync::Mutex};
 use tower_http::trace::TraceLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod error;
 mod http;
@@ -37,6 +38,14 @@ use uuid::Uuid;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "addons_booking=debug,tower_http=debug".into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
+
     // TODO: Ultimately I'll need to decide if I want to send a unique token per-website or per-app
     register_call_token(Uuid::from_u128(0x01938f4ff50c72039f89b367e9d49efbu128));
 

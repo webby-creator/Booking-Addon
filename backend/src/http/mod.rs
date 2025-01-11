@@ -473,8 +473,10 @@ async fn post_install(
                 (
                     String::from("startDay"),
                     (0..DAYS.len())
-                        .map(|_| {
+                        .map(|i| {
                             time::Date::parse("2024-12-02", &date_format)
+                                .unwrap()
+                                .replace_day(2 + i as u8)
                                 .unwrap()
                                 .into()
                         })
