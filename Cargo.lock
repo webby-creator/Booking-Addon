@@ -2933,6 +2933,7 @@ dependencies = [
  "lazy_static",
  "log",
  "num_enum",
+ "rand",
  "regex",
  "serde",
  "serde_json",

@@ -255,6 +255,12 @@ async fn get_available_hours(
             "scheduleId": v.schedule_id,
             "staffId": v.staff_id,
             "staffScheduleId": v.staff_schedule_id,
+            "formId": service
+                .fields
+                .get(&SchematicFieldKey::OtherStatic("formId"))
+                .unwrap()
+                .any_as_text()
+                .unwrap(),
         })
     })
     .collect::<Vec<_>>();
