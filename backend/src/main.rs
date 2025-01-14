@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
             .route("/:uuid/availableDays", get(get_available_days))
             .route("/:uuid/availableHours", get(get_available_hours))
             // .route("/:uuid/book", post(post_booking))
-            .route("/form-process/before", get(post_form_process_before))
+            .route("/form-process/before", post(post_form_process_before))
             .route("/form-process/error", post(post_form_process_error))
             .route("/form-process/after", post(post_form_process_after))
             .route("/form-render", get(get_form_render))
@@ -520,7 +520,7 @@ async fn post_form_process_after(
         HashMap::from([
             (
                 String::from("bookDate"),
-                format!("{year}-{month:02}-{day:02} {time} +00:00:00").into(),
+                format!("{year}-{month:02}-{day:02}T{time}").into(),
             ),
             (
                 String::from("bookID"),

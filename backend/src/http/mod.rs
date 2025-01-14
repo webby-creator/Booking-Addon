@@ -2,8 +2,9 @@ use std::collections::HashMap;
 
 use addon_common::{
     request::{
-        create_cms_collection, create_website_form, CreateWebsiteForm, FormFieldType, FormType,
-        Layer, LayerInput, LayerInputData, LayerRow,
+        create_cms_collection, create_website_form, create_website_form_action, CreateWebsiteForm,
+        FormAction, FormActionEmail, FormFieldType, FormType, Layer, LayerInput, LayerInputData,
+        LayerRow,
     },
     InstallResponse, JsonResponse, RegisterNewJson, WrappingResponse,
 };
@@ -51,7 +52,7 @@ async fn post_install(
     let form = create_website_form(
         website_id,
         CreateWebsiteForm {
-            name: None,
+            name: Some(String::from("Haircut Service")),
             type_of: FormType::Contact,
             addon_uuid: Some(Uuid::from_u128(0x01938f4ff50c72039f89b367e9d49efbu128)),
             layers: Some(vec![Layer {
@@ -155,6 +156,22 @@ async fn post_install(
             }]),
             conditions: None,
         },
+    )
+    .await?;
+
+    create_website_form_action(
+        website_id,
+        Uuid::try_parse(&form.public_id)?,
+        FormAction::Email(FormActionEmail {
+            subject: String::from("You received a new booking for {{bookingDateTime}}!"),
+            // TODO: Replace w/ String::from("{{OWNER_EMAIL}}")
+            send_to: vec![member.email.clone().context("Member Email")?],
+            from_name: member.email.clone().context("Member Email")?,
+            from_email: vec!["noreply@wibbly.one".to_string()],
+            reply_to_email: "noreply@wibbly.one".to_string(),
+            body: String::from("{{SUBMISSION_LINK}}"),
+            attachments: Vec::new(),
+        }),
     )
     .await?;
 
