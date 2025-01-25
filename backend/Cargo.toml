@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-addon-common = { path = "../../addon-common", features = ["sqlx"] }
+addon-common = { path = "../../addon-common" }
 global-common = { path = "../../global-common" }
 
 hyper = "1.5"

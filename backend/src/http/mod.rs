@@ -161,7 +161,7 @@ async fn post_install(
 
     create_website_form_action(
         website_id,
-        Uuid::try_parse(&form.public_id)?,
+        form.id,
         FormAction::Email(FormActionEmail {
             subject: String::from("You received a new booking for {{bookingDateTime}}!"),
             // TODO: Replace w/ String::from("{{OWNER_EMAIL}}")
@@ -299,7 +299,7 @@ async fn post_install(
                 (String::from("type"), vec!["appointment".into()]),
                 (String::from("maxParticipants"), vec![1.into()]),
                 (String::from("priceAmount"), vec![20.into()]),
-                (String::from("formId"), vec![form.public_id.into()]),
+                (String::from("formId"), vec![form.id.to_string().into()]),
             ])),
         },
     )
