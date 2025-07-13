@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 addon-common = { path = "../../addon-common" }
-global-common = { path = "../../global-common" }
+global-common = { git = "https://github.com/webby-creator/Global-Common", version = "0.1.0" }
 
 hyper = "1.5"
 axum = { version = "0.7", features = ["multipart"] }
