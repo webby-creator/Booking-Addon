@@ -167,8 +167,8 @@ async fn post_install(
             // TODO: Replace w/ String::from("{{OWNER_EMAIL}}")
             send_to: vec![member.email.clone().context("Member Email")?],
             from_name: member.email.clone().context("Member Email")?,
-            from_email: vec!["noreply@wibbly.one".to_string()],
-            reply_to_email: "noreply@wibbly.one".to_string(),
+            from_email: vec!["noreply@dinko.space".to_string()],
+            reply_to_email: "noreply@dinko.space".to_string(),
             body: String::from("{{SUBMISSION_LINK}}"),
             attachments: Vec::new(),
         }),
@@ -229,6 +229,7 @@ async fn post_install(
                 },
             ]),
             data: None,
+            is_single: true,
         },
     )
     .await?;
@@ -301,6 +302,7 @@ async fn post_install(
                 (String::from("priceAmount"), vec![20.into()]),
                 (String::from("formId"), vec![form.id.to_string().into()]),
             ])),
+            is_single: true,
         },
     )
     .await?;
@@ -332,6 +334,7 @@ async fn post_install(
                 String::from("staffName"),
                 vec!["Staff Member #1".into()],
             )])),
+            is_single: true,
         },
     )
     .await?;
@@ -395,6 +398,7 @@ async fn post_install(
                     }))],
                 ),
             ])),
+            is_single: true,
         },
     )
     .await?;
@@ -556,6 +560,7 @@ async fn post_install(
                         .collect::<Vec<_>>(),
                 ),
             ])),
+            is_single: false,
         },
     )
     .await?;
