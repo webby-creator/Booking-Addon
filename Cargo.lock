@@ -13,6 +13,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "addon-booking"
+version = "0.1.0"
+dependencies = [
+ "addon-common",
+ "axum",
+ "axum-extra",
+ "eyre",
+ "global-common",
+ "hyper 1.5.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.11",
+ "time",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "addon-common"
 version = "0.1.0"
 dependencies = [
@@ -338,28 +360,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
-]
-
-[[package]]
-name = "blog-booking"
-version = "0.1.0"
-dependencies = [
- "addon-common",
- "axum",
- "axum-extra",
- "eyre",
- "global-common",
- "hyper 1.5.2",
- "serde",
- "serde_json",
- "thiserror 2.0.11",
- "time",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
