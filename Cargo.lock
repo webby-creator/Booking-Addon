@@ -1038,7 +1038,7 @@ checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
 [[package]]
 name = "global-common"
 version = "0.1.0"
-source = "git+https://github.com/webby-creator/Global-Common#f40508d9ee2ffd9b098f809b97d553280d707d3f"
+source = "git+https://github.com/webby-creator/Global-Common#8d881b475df9a9f0bc9c9f65e476e6937cbbfb14"
 dependencies = [
  "eyre",
  "num_enum",

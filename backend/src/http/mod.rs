@@ -32,6 +32,7 @@ async fn post_install(
         owner_id,
         member,
         website,
+        version,
     }): Json<RegisterNewJson>,
 ) -> Result<JsonResponse<InstallResponse>> {
     let date_format = format_description!("[year]-[month]-[day]");
