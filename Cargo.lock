@@ -142,7 +142,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_repr",
- "sqlx",
  "storage",
  "styles",
  "thiserror 1.0.69",
@@ -1038,13 +1037,14 @@ checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
 [[package]]
 name = "global-common"
 version = "0.1.0"
-source = "git+https://github.com/webby-creator/Global-Common#8d881b475df9a9f0bc9c9f65e476e6937cbbfb14"
+source = "git+https://github.com/webby-creator/Global-Common#b2e55d78534ebcfaf14e2963b4dc9bd0c482cf77"
 dependencies = [
  "eyre",
  "num_enum",
  "serde",
  "serde_json",
  "serde_repr",
+ "thiserror 1.0.69",
  "time",
  "url",
  "uuid",
