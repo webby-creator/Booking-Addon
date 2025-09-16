@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-addon-common = { path = "../../addon-common" }
+webby-addon-common = { version = "0.1.0", registry = "tasty" }
 # TODO: SHOULD NOT BE REFERENCED BY ADDON - ONLY ADDON COMMON SHOULD BE REFERENCED
-global-common = { git = "https://github.com/webby-creator/Global-Common", version = "0.1.0" }
+webby-global-common = { version = "0.1.0", registry = "tasty" }
 
 hyper = "1.5"
 axum = { version = "0.7", features = ["multipart"] }

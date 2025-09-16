@@ -3,7 +3,7 @@ extern crate tracing;
 
 use std::{collections::HashMap, net::SocketAddr, sync::LazyLock};
 
-use addon_common::{
+use webby_addon_common::{
     register_call_token,
     request::{get_cms_row_by_id, import_data_row, query_cms_rows},
     JsonResponse, ListResponse, WrappingResponse,
@@ -14,7 +14,7 @@ use axum::{
     Json, Router,
 };
 use eyre::ContextCompat;
-use global_common::{
+use webby_global_common::{
     filter::{Filter, FilterConditionType, FilterValue},
     request::CmsQuery,
     response::CmsRowResponse,

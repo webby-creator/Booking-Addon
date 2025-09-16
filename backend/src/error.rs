@@ -1,4 +1,4 @@
-use addon_common::WrappingResponse;
+use webby_addon_common::WrappingResponse;
 use axum::response::{IntoResponse, Json, Response};
 use hyper::StatusCode;
 

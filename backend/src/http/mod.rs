@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use addon_common::{
+use webby_addon_common::{
     request::{
         create_cms_collection, create_website_form, create_website_form_action, CreateWebsiteForm,
         FormAction, FormActionEmail, FormFieldType, FormType, Layer, LayerInput, LayerInputData,
@@ -10,7 +10,7 @@ use addon_common::{
 };
 use axum::{routing::post, Json, Router};
 use eyre::ContextCompat;
-use global_common::{
+use webby_global_common::{
     request::{CmsCreate, CmsCreateDataColumn, CmsUpdate},
     schema::SchematicFieldType,
     uuid::CollectionName,
